@@ -1,0 +1,4 @@
+.DS_Store
+api/.wrangler
+api/node_modules
+*.log

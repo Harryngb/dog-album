@@ -1,0 +1,12 @@
+name = "dog-album-api"
+main = "src/index.js"
+compatibility_date = "2025-04-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "dog-album-db"
+database_id = "5cfac690-78ba-4f14-bdff-840622e19d46"
+
+[[r2_buckets]]
+binding = "PHOTOS"
+bucket_name = "dog-album-photos"

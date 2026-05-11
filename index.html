@@ -1,0 +1,877 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>🐶 我家狗狗</title>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,system-ui,"Segoe UI",Roboto,"Noto Sans SC",sans-serif;background:#faf9f6;color:#333;line-height:1.6}
+
+/* Hero */
+.hero{text-align:center;padding:60px 24px 40px;background:linear-gradient(135deg,#fdf6e3,#f5e6d3)}
+.hero h1{font-size:2.8rem;font-weight:800;letter-spacing:-.02em}
+.hero h1 span{color:#b8860b}
+.hero p{margin-top:8px;color:#666;font-size:1.1rem}
+.hero .paw{display:inline-block;animation:bounce 2s infinite}
+@keyframes bounce{0%,100%{transform:translateY(0)}50%{transform:translateY(-6px)}}
+
+/* Gallery */
+.gallery{max-width:1200px;margin:0 auto;padding:40px 16px 80px;display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:20px}
+.photo-card{position:relative;border-radius:16px;overflow:hidden;background:#fff;box-shadow:0 2px 12px rgba(0,0,0,.06);transition:transform .25s,box-shadow .3s;cursor:pointer}
+.photo-card:hover{transform:translateY(-4px);box-shadow:0 8px 30px rgba(0,0,0,.12)}
+.photo-card img{display:block;width:100%;height:280px;object-fit:cover;transition:transform .4s}
+.photo-card:hover img{transform:scale(1.03)}
+.photo-card .caption{position:absolute;bottom:0;left:0;right:0;padding:40px 16px 14px;background:linear-gradient(transparent,rgba(0,0,0,.55));color:#fff;font-size:.9rem;font-weight:500;opacity:0;transition:opacity .3s}
+.photo-card:hover .caption{opacity:1}
+.photo-card .caption .date{font-weight:400;font-size:.75rem;opacity:.8;margin-left:6px}
+.photo-card .like-badge{position:absolute;top:10px;right:10px;background:rgba(0,0,0,.5);backdrop-filter:blur(4px);color:#fff;padding:3px 10px;border-radius:20px;font-size:.75rem;display:flex;align-items:center;gap:4px;pointer-events:none}
+
+@media(min-width:900px){
+  .gallery{grid-template-columns:repeat(3,1fr)}
+  .photo-card:nth-child(5n+1){grid-row:span 2}
+  .photo-card:nth-child(5n+1) img{height:560px}
+}
+
+/* Lightbox */
+.lightbox{display:none;position:fixed;inset:0;z-index:999;background:rgba(0,0,0,.85);backdrop-filter:blur(8px);justify-content:center;align-items:center;padding:24px}
+.lightbox.active{display:flex}
+
+.lightbox-content{display:flex;width:95vw;max-width:1200px;max-height:90vh;border-radius:16px;overflow:hidden;background:#000;position:relative}
+
+/* Image area */
+.lightbox-image{flex:3;position:relative;display:flex;align-items:center;justify-content:center;background:#000;min-width:0}
+.lightbox-image img{max-width:100%;max-height:90vh;object-fit:contain;display:block}
+.lb-nav-btn{position:absolute;top:50%;transform:translateY(-50%);color:#fff;background:rgba(255,255,255,.1);border:none;width:40px;height:40px;border-radius:50%;cursor:pointer;font-size:1.8rem;display:flex;align-items:center;justify-content:center;opacity:.5;transition:opacity .2s;z-index:2}
+.lb-nav-btn:hover{opacity:1;background:rgba(255,255,255,.2)}
+.lb-prev{left:12px}
+.lb-next{right:12px}
+
+/* Canvas */
+.danmaku-canvas{position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:1}
+
+.lb-close{position:absolute;top:12px;right:12px;z-index:10;background:rgba(0,0,0,.4);border:none;color:#fff;width:36px;height:36px;border-radius:50%;font-size:1.4rem;cursor:pointer;display:flex;align-items:center;justify-content:center;opacity:.6;transition:opacity .2s}
+.lb-close:hover{opacity:1}
+
+/* Sidebar */
+.lightbox-sidebar{flex:2;min-width:300px;max-width:400px;background:#fff;display:flex;flex-direction:column;overflow:hidden}
+.sidebar-head{padding:18px 20px 12px;border-bottom:1px solid #f0f0f0}
+.sidebar-head h2{font-size:1rem;font-weight:600;color:#333;line-height:1.3}
+.sidebar-head .date{color:#999;font-size:.78rem;font-weight:400;margin-left:8px}
+
+/* Like */
+.like-row{display:flex;align-items:center;gap:16px;padding:12px 20px;border-bottom:1px solid #f0f0f0}
+.like-btn{display:flex;align-items:center;gap:6px;padding:6px 16px;border:1px solid #ddd;border-radius:24px;background:#fafafa;cursor:pointer;font-size:.9rem;transition:all .2s;user-select:none}
+.like-btn:hover{border-color:#ff6b6b;background:#fff}
+.like-btn.liked{border-color:#ff6b6b;background:#fff5f5;color:#e74c3c}
+.like-btn.liked .heart{color:#e74c3c}
+.like-btn .heart{font-size:1.1rem}
+.like-count{font-weight:500;min-width:12px}
+
+/* Emoji reactions */
+.emoji-row{display:flex;gap:6px;padding:10px 20px;border-bottom:1px solid #f0f0f0;flex-wrap:wrap}
+.emoji-btn{display:flex;align-items:center;gap:4px;padding:4px 10px;border:1px solid #e8e8e8;border-radius:20px;background:#fafafa;cursor:pointer;font-size:1.1rem;transition:all .2s;user-select:none}
+.emoji-btn:hover{border-color:#bbb;background:#fff}
+.emoji-btn.active{border-color:#f0c27f;background:#fffaf0;box-shadow:0 0 0 1px #f0c27f}
+.emoji-btn .count{font-size:.72rem;color:#999;font-weight:500;min-width:8px}
+
+/* Danmaku section */
+.danmaku-section{padding:10px 20px;border-bottom:1px solid #f0f0f0}
+.danmaku-section .dm-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:6px}
+.dm-header label{font-size:.82rem;color:#666;cursor:pointer;display:flex;align-items:center;gap:6px}
+.dm-header input[type=checkbox]{accent-color:#b8860b}
+.dm-input-wrap{display:flex;gap:8px}
+.dm-input-wrap input{flex:1;padding:6px 12px;border:1px solid #ddd;border-radius:20px;font-size:.82rem;outline:0;transition:border-color .2s}
+.dm-input-wrap input:focus{border-color:#b8860b}
+.dm-input-wrap .color-picker{border:0;background:0;cursor:pointer;padding:0;width:32px;height:32px;border-radius:50%}
+.dm-input-wrap button{padding:6px 14px;background:#b8860b;color:#fff;border:none;border-radius:20px;cursor:pointer;font-size:.82rem;white-space:nowrap}
+.dm-input-wrap button:active{opacity:.8}
+
+/* Comments */
+.comments-area{flex:1;overflow-y:auto;padding:12px 20px}
+.comment-item{padding:10px 0;border-bottom:1px solid #f5f5f5}
+.comment-item:last-child{border-bottom:none}
+.comment-item .meta{display:flex;align-items:center;gap:8px;margin-bottom:3px}
+.comment-item .author{font-size:.78rem;font-weight:600;color:#555}
+.comment-item .time{font-size:.7rem;color:#bbb}
+.comment-item .text{font-size:.85rem;color:#444;word-break:break-word;line-height:1.4}
+.comment-empty{padding:32px 0;text-align:center;color:#ccc;font-size:.85rem}
+.comment-loading{text-align:center;padding:20px;color:#ccc;font-size:.82rem}
+
+.comment-form{padding:10px 20px 14px;border-top:1px solid #f0f0f0;display:flex;gap:8px}
+.comment-form input[type=text]{flex:1;padding:8px 14px;border:1px solid #ddd;border-radius:24px;font-size:.85rem;outline:0;transition:border-color .2s}
+.comment-form input[type=text]:focus{border-color:#b8860b}
+.comment-form button{padding:8px 18px;background:#b8860b;color:#fff;border:none;border-radius:24px;cursor:pointer;font-size:.85rem;white-space:nowrap}
+.comment-form button:disabled{opacity:.5;cursor:not-allowed}
+
+/* API status */
+.api-status{text-align:center;padding:4px 0;font-size:.72rem;color:#ccc}
+
+/* Scrollbar */
+.comments-area::-webkit-scrollbar{width:4px}
+.comments-area::-webkit-scrollbar-thumb{background:#ddd;border-radius:2px}
+.comments-area::-webkit-scrollbar-track{background:transparent}
+
+/* Upload button */
+.upload-btn{display:inline-block;margin-top:14px;padding:10px 24px;background:#b8860b;color:#fff;border:none;border-radius:24px;font-size:.95rem;cursor:pointer;transition:background .2s,transform .15s;}
+.upload-btn:hover{background:#a0750a;transform:translateY(-1px)}
+.upload-btn:active{transform:scale(.97)}
+
+/* Upload modal */
+.modal-overlay{display:none;position:fixed;inset:0;z-index:1000;background:rgba(0,0,0,.6);backdrop-filter:blur(6px);justify-content:center;align-items:center;padding:24px}
+.modal-overlay.active{display:flex}
+.modal{background:#fff;border-radius:20px;width:100%;max-width:480px;max-height:90vh;overflow-y:auto;padding:32px 28px 24px;position:relative;box-shadow:0 20px 60px rgba(0,0,0,.3)}
+.modal h2{font-size:1.3rem;margin-bottom:20px;display:flex;align-items:center;gap:8px}
+.modal-close{position:absolute;top:14px;right:18px;font-size:1.5rem;color:#999;background:0;border:none;cursor:pointer;transition:color .2s}
+.modal-close:hover{color:#333}
+
+.dropzone{border:2px dashed #ddd;border-radius:16px;padding:40px 20px;text-align:center;cursor:pointer;transition:border-color .2s,background .2s}
+.dropzone:hover{border-color:#b8860b;background:#fefcf7}
+.dropzone.has-file{border-color:#b8860b;background:#fefcf7;padding:16px}
+.dropzone .icon{font-size:2.2rem;display:block;margin-bottom:8px}
+.dropzone p{color:#999;font-size:.9rem}
+.dropzone .hint{color:#ccc;font-size:.78rem;margin-top:6px}
+
+.upload-preview{display:none;margin-top:16px}
+.upload-preview.show{display:block}
+.upload-preview img{width:100%;max-height:300px;object-fit:contain;border-radius:12px;background:#f5f5f5}
+.upload-preview .info{font-size:.82rem;color:#999;margin-top:6px}
+
+.upload-form{margin-top:16px;display:flex;flex-direction:column;gap:10px}
+.upload-form input[type=text]{padding:10px 14px;border:1px solid #ddd;border-radius:12px;font-size:.9rem;outline:0;transition:border-color .2s}
+.upload-form input[type=text]:focus{border-color:#b8860b}
+.upload-form .row{display:flex;gap:10px}
+.upload-form .row button{flex:1;padding:10px;border:none;border-radius:12px;font-size:.9rem;cursor:pointer;transition:opacity .2s}
+.upload-form .btn-primary{background:#b8860b;color:#fff}
+.upload-form .btn-primary:disabled{opacity:.5;cursor:not-allowed}
+.upload-form .btn-cancel{background:#f0f0f0;color:#666}
+.upload-form .btn-cancel:hover{background:#e5e5e5}
+
+.upload-status{margin-top:12px;text-align:center;font-size:.85rem;padding:8px;border-radius:8px}
+.upload-status.success{background:#f0faf0;color:#2d7d2d}
+.upload-status.error{background:#fef2f2;color:#c0392b}
+.upload-status .spinner-sm{display:inline-block;width:18px;height:18px;border:2px solid #eee;border-top-color:#b8860b;border-radius:50%;animation:spin .8s linear infinite;margin-right:8px;vertical-align:middle}
+
+/* Empty & loading states */
+.empty-state{grid-column:1/-1;text-align:center;padding:80px 24px;color:#999}
+.empty-state .big{font-size:4rem;display:block;margin-bottom:16px}
+.empty-state h2{font-size:1.3rem;color:#666;margin-bottom:8px}
+.loading{grid-column:1/-1;text-align:center;padding:80px;color:#999}
+.spinner{width:40px;height:40px;margin:0 auto 16px;border:3px solid #eee;border-top-color:#b8860b;border-radius:50%;animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+.footer{text-align:center;padding:24px;color:#bbb;font-size:.85rem}
+
+/* Responsive */
+@media(max-width:700px){
+  .lightbox-content{flex-direction:column;width:100vw;height:100dvh;max-height:100dvh;border-radius:0}
+  .lightbox-image{flex:1;min-height:0;max-height:50vh}
+  .lightbox-image img{max-height:50vh}
+  .lightbox-sidebar{min-width:0;max-width:none;flex:1;min-height:0}
+  .hero{padding:40px 16px 28px}
+  .hero h1{font-size:2rem}
+  .gallery{gap:12px;padding:20px 12px 60px;grid-template-columns:repeat(2,1fr)}
+  .photo-card img,.photo-card:nth-child(5n+1) img{height:180px}
+  .photo-card:nth-child(5n+1){grid-row:span 1}
+  .lb-nav-btn{width:32px;height:32px;font-size:1.3rem}
+}
+</style>
+</head>
+<body>
+
+<section class="hero">
+  <h1>🐶 <span>我家狗狗</span></h1>
+  <p>记录和你在一起的每一天 <span class="paw">🐾</span></p>
+  <button class="upload-btn" id="uploadOpenBtn">📸 上传照片</button>
+</section>
+
+<div class="gallery" id="gallery">
+  <div class="loading"><div class="spinner"></div>正在加载照片…</div>
+</div>
+
+<!-- Lightbox -->
+<div class="lightbox" id="lightbox">
+  <div class="lightbox-content">
+    <div class="lightbox-image" id="lbImageArea">
+      <img id="lbImg" src="" alt="">
+      <canvas class="danmaku-canvas" id="dmCanvas"></canvas>
+      <button class="lb-nav-btn lb-prev" id="lbPrev">&#8249;</button>
+      <button class="lb-nav-btn lb-next" id="lbNext">&#8250;</button>
+    </div>
+    <div class="lightbox-sidebar" id="lbSidebar">
+      <div class="sidebar-head">
+        <h2 id="lbTitle">🐶 <span id="lbCaption"></span><span class="date" id="lbDate"></span></h2>
+      </div>
+
+      <!-- Like -->
+      <div class="like-row">
+        <button class="like-btn" id="likeBtn">
+          <span class="heart">🤍</span>
+          <span class="like-count" id="likeCount">0</span>
+        </button>
+        <span style="font-size:.78rem;color:#bbb">点个赞吧</span>
+      </div>
+
+      <!-- Emoji reactions -->
+      <div class="emoji-row" id="emojiRow"></div>
+
+      <!-- Danmaku -->
+      <div class="danmaku-section">
+        <div class="dm-header">
+          <label><input type="checkbox" id="dmToggle"> 🎯 显示弹幕</label>
+        </div>
+        <div class="dm-input-wrap">
+          <input type="text" id="dmInput" placeholder="发条弹幕..." maxlength="60">
+          <input type="color" id="dmColor" class="color-picker" value="#ffffff">
+          <button id="dmSend">发送</button>
+        </div>
+      </div>
+
+      <!-- Comments -->
+      <div class="comments-area" id="commentsArea">
+        <div class="comment-loading">加载评论…</div>
+      </div>
+      <div class="comment-form">
+        <input type="text" id="cmtInput" placeholder="说点什么…" maxlength="500">
+        <button id="cmtSend">发送</button>
+      </div>
+    </div>
+    <button class="lb-close" id="lbClose">&times;</button>
+  </div>
+</div>
+
+<!-- Upload modal -->
+<div class="modal-overlay" id="uploadModal">
+  <div class="modal">
+    <button class="modal-close" id="uploadModalClose">&times;</button>
+    <h2>📸 上传照片</h2>
+    <div class="dropzone" id="dropzone">
+      <span class="icon">📁</span>
+      <p>点击选择照片</p>
+      <p class="hint">支持 JPG / PNG / WebP / AVIF / GIF，最大 20MB</p>
+    </div>
+    <input type="file" id="fileInput" accept="image/*" hidden>
+    <div class="upload-preview" id="uploadPreview">
+      <img id="previewImg" alt="预览">
+      <p class="info" id="fileInfo"></p>
+    </div>
+    <div class="upload-form" id="uploadForm" style="display:none">
+      <input type="text" id="captionInput" placeholder="给照片起个名字（可选）" maxlength="100">
+      <div class="row">
+        <button class="btn-primary" id="uploadSubmit">上传</button>
+        <button class="btn-cancel" id="uploadCancel">取消</button>
+      </div>
+    </div>
+    <div class="upload-status" id="uploadStatus"></div>
+  </div>
+</div>
+
+<div class="footer">Made with ♥</div>
+
+<script>
+// ============================================================
+// CONFIG — 部署时把这里改成你的 Cloudflare Worker 地址
+// ============================================================
+const API_BASE = 'https://dog-album-api.shenfu0124.workers.dev';
+const VISITOR_ID = localStorage.getItem('vid') || (localStorage.setItem('vid', crypto.randomUUID()), localStorage.getItem('vid'));
+const EMOJIS = ['🐶','🥰','😍','😂','🐾','❤️'];
+
+// ============================================================
+// DOM refs
+// ============================================================
+const $ = id => document.getElementById(id);
+const gallery = $('gallery');
+const lb = $('lightbox');
+const lbImg = $('lbImg');
+const lbCaption = $('lbCaption');
+const lbDate = $('lbDate');
+const lbTitle = $('lbTitle');
+const lbClose = $('lbClose');
+const lbPrev = $('lbPrev');
+const lbNext = $('lbNext');
+const lbImageArea = $('lbImageArea');
+const likeBtn = $('likeBtn');
+const likeCount = $('likeCount');
+const emojiRow = $('emojiRow');
+const dmCanvas = $('dmCanvas');
+const dmToggle = $('dmToggle');
+const dmInput = $('dmInput');
+const dmColor = $('dmColor');
+const dmSend = $('dmSend');
+const commentsArea = $('commentsArea');
+const cmtInput = $('cmtInput');
+const cmtSend = $('cmtSend');
+
+let images = [];
+let currentIndex = 0;
+let apiOk = false;
+let likeState = { liked: false, count: 0 };
+let dmItems = [];
+
+// ============================================================
+// Utility
+// ============================================================
+function filenameToCaption(filename) {
+  let n = filename.replace(/\.[^.]+$/, '').replace(/[-_]+/g, ' ');
+  // remove leading date if present
+  n = n.replace(/^\d{4}\.?\d{2}\.?\d{2}\s*/, '');
+  return n.charAt(0).toUpperCase() + n.slice(1) || '🐶';
+}
+function extractDate(filename) {
+  const m = filename.match(/(\d{4})[-_.]?(\d{2})[-_.]?(\d{2})/);
+  return m ? `${m[1]}.${m[2]}.${m[3]}` : '';
+}
+function getImg(item){
+  const src = typeof item === 'string' ? item : item.src;
+  return src.startsWith('/photos/') && API_BASE ? API_BASE + src : src;
+}
+function getCaption(item){
+  if(typeof item === 'string') return filenameToCaption(item.split('/').pop());
+  return item.caption || filenameToCaption(item.src.split('/').pop());
+}
+function getDate(item){
+  if(typeof item === 'object' && item.date) return item.date;
+  return extractDate(typeof item === 'string' ? item : item.src);
+}
+function getPhotoId(item){return (typeof item === 'string' ? item : item.src).split('/').pop()}
+
+// ============================================================
+// API helper
+// ============================================================
+async function api(path, opts={}){
+  if(!API_BASE) throw new Error('API not configured');
+  const url = API_BASE + path;
+  const res = await fetch(url, { headers:{'Content-Type':'application/json'}, ...opts });
+  if(!res.ok){ const e=await res.text(); throw new Error(e); }
+  return res.json();
+}
+function apiGet(path){ return api(path) }
+function apiPost(path, body){ return api(path, {method:'POST',body:JSON.stringify(body)}) }
+
+// ============================================================
+// Gallery
+// ============================================================
+function buildPhotoCard(item, idx) {
+  const src = getImg(item);
+  const caption = getCaption(item);
+  const date = getDate(item);
+  const pid = getPhotoId(item);
+
+  const card = document.createElement('div');
+  card.className = 'photo-card';
+  card.innerHTML = `
+    <img src="${src}" alt="${caption}" loading="lazy">
+    <div class="caption">${caption}${date ? `<span class="date">${date}</span>` : ''}</div>
+    <div class="like-badge" id="badge-${idx}">🤍 0</div>
+  `;
+  card.addEventListener('click', () => openLightbox(idx));
+  return card;
+}
+
+function renderGallery(){
+  if(images.length===0){
+    gallery.innerHTML='<div class="empty-state"><span class="big">📸</span><h2>还没有照片呢</h2><p>把你的狗狗照片放到 <code>photos/</code> 文件夹里</p></div>';
+    return;
+  }
+  gallery.innerHTML='';
+  images.forEach((item,i)=>{ gallery.appendChild(buildPhotoCard(item,i)); });
+  loadGalleryStats();
+}
+
+// Batch load likes for gallery badges
+async function loadGalleryStats() {
+  if(!API_BASE) return;
+  const ids = images.map((item,i)=>({idx:i,pid:getPhotoId(item)}));
+  try {
+    const pids = ids.map(d=>d.pid).join(',');
+    const data = await apiGet(`/api/likes?photoIds=${encodeURIComponent(pids)}&visitorId=${VISITOR_ID}`);
+    ids.forEach(({idx,pid})=>{
+      const badge = document.getElementById(`badge-${idx}`);
+      if(!badge) return;
+      const c = data.counts?.[pid] || 0;
+      const liked = data.liked?.includes(pid);
+      badge.innerHTML = `${liked ? '❤️' : '🤍'} ${c}`;
+    });
+  } catch(_){}
+}
+
+// ============================================================
+// Lightbox
+// ============================================================
+async function openLightbox(idx) {
+  currentIndex = idx;
+  const item = images[idx];
+  lbImg.src = getImg(item);
+  lbCaption.textContent = getCaption(item);
+  const d = getDate(item);
+  lbDate.textContent = d || '';
+  lbTitle.textContent = getCaption(item);
+  lb.classList.add('active');
+  document.body.style.overflow = 'hidden';
+
+  initCanvas();
+  loadLikeState();
+  loadReactions();
+  loadComments();
+  stopDanmaku();
+
+  // Show/hide nav buttons
+  lbPrev.style.display = images.length > 1 ? '' : 'none';
+  lbNext.style.display = images.length > 1 ? '' : 'none';
+}
+
+function closeLightbox() {
+  lb.classList.remove('active');
+  document.body.style.overflow = '';
+  stopDanmaku();
+}
+
+function updateLightbox() {
+  const item = images[currentIndex];
+  lbImg.src = getImg(item);
+  lbCaption.textContent = getCaption(item);
+  const d = getDate(item);
+  lbDate.textContent = d || '';
+  lbTitle.textContent = getCaption(item);
+  initCanvas();
+  loadLikeState();
+  loadReactions();
+  loadComments();
+  stopDanmaku();
+}
+
+function prevImage(){currentIndex=(currentIndex-1+images.length)%images.length;updateLightbox()}
+function nextImage(){currentIndex=(currentIndex+1)%images.length;updateLightbox()}
+
+lbClose.addEventListener('click', closeLightbox);
+lbPrev.addEventListener('click', prevImage);
+lbNext.addEventListener('click', nextImage);
+
+document.addEventListener('keydown', e=>{
+  if(!lb.classList.contains('active')) return;
+  if(e.key==='Escape') closeLightbox();
+  if(e.key==='ArrowLeft') prevImage();
+  if(e.key==='ArrowRight') nextImage();
+});
+
+lb.querySelector('.lightbox-content').addEventListener('click', e=>e.stopPropagation());
+lb.addEventListener('click', closeLightbox);
+
+// Touch swipe
+let tx=0;
+lbImageArea.addEventListener('touchstart',e=>{tx=e.changedTouches[0].screenX});
+lbImageArea.addEventListener('touchend',e=>{
+  const d=e.changedTouches[0].screenX-tx;
+  if(Math.abs(d)>50) d>0?prevImage():nextImage();
+});
+
+// ============================================================
+// Like
+// ============================================================
+async function loadLikeState() {
+  likeBtn.className='like-btn';
+  likeCount.textContent='…';
+  if(!API_BASE) { likeCount.textContent='0'; return; }
+  const pid = getPhotoId(images[currentIndex]);
+  try {
+    const data = await apiGet(`/api/likes?photoId=${encodeURIComponent(pid)}&visitorId=${VISITOR_ID}`);
+    likeState = { liked: data.liked, count: data.count };
+    likeBtn.classList.toggle('liked', data.liked);
+    likeBtn.querySelector('.heart').textContent = data.liked ? '❤️' : '🤍';
+    likeCount.textContent = data.count;
+  } catch(_){ likeCount.textContent='0'; }
+}
+
+async function toggleLike() {
+  if(!API_BASE) return;
+  const pid = getPhotoId(images[currentIndex]);
+  try {
+    const data = await apiPost('/api/like', { photoId: pid, visitorId: VISITOR_ID });
+    likeState = { liked: data.liked, count: data.count };
+    likeBtn.classList.toggle('liked', data.liked);
+    likeBtn.querySelector('.heart').textContent = data.liked ? '❤️' : '🤍';
+    likeCount.textContent = data.count;
+    // Update gallery badge
+    const badge = document.getElementById(`badge-${currentIndex}`);
+    if(badge) badge.innerHTML = `${data.liked ? '❤️' : '🤍'} ${data.count}`;
+  } catch(_){}
+}
+
+likeBtn.addEventListener('click', toggleLike);
+
+// ============================================================
+// Emoji Reactions
+// ============================================================
+let myReactions = [];
+
+async function loadReactions() {
+  emojiRow.innerHTML = '<span style="font-size:.78rem;color:#ccc">加载中…</span>';
+  if(!API_BASE) { renderEmojiRow({}); return; }
+  const pid = getPhotoId(images[currentIndex]);
+  try {
+    const data = await apiGet(`/api/reactions?photoId=${encodeURIComponent(pid)}&visitorId=${VISITOR_ID}`);
+    myReactions = data.myReactions || [];
+    renderEmojiRow(data.reactions || {});
+  } catch(_){ renderEmojiRow({}); }
+}
+
+function renderEmojiRow(counts) {
+  emojiRow.innerHTML = '';
+  EMOJIS.forEach(emoji => {
+    const btn = document.createElement('button');
+    btn.className = 'emoji-btn' + (myReactions.includes(emoji) ? ' active' : '');
+    const c = counts[emoji] || 0;
+    btn.innerHTML = `${emoji} <span class="count">${c||''}</span>`;
+    btn.addEventListener('click', () => toggleReaction(emoji));
+    emojiRow.appendChild(btn);
+  });
+}
+
+async function toggleReaction(emoji) {
+  if(!API_BASE) return;
+  const pid = getPhotoId(images[currentIndex]);
+  try {
+    const data = await apiPost('/api/reaction', { photoId: pid, emoji, visitorId: VISITOR_ID });
+    // Reload all reactions
+    loadReactions();
+  } catch(_){}
+}
+
+// ============================================================
+// Danmaku
+// ============================================================
+let dmRunning = false;
+let dmRAF = null;
+let dmList = [];
+
+function initCanvas() {
+  const rect = lbImageArea.getBoundingClientRect();
+  dmCanvas.width = rect.width;
+  dmCanvas.height = rect.height;
+}
+
+function startDanmaku() {
+  if(!API_BASE || dmRunning) return;
+  dmRunning = true;
+  const pid = getPhotoId(images[currentIndex]);
+  apiGet(`/api/danmaku?photoId=${encodeURIComponent(pid)}`).then(data => {
+    dmList = (data.danmaku || []).map(d => createDmItem(d.text, d.color));
+  }).catch(()=>{});
+  dmRAF = requestAnimationFrame(dmLoop);
+}
+
+function stopDanmaku() {
+  dmRunning = false;
+  dmList = [];
+  if(dmRAF) { cancelAnimationFrame(dmRAF); dmRAF = null; }
+  const ctx = dmCanvas.getContext('2d');
+  ctx.clearRect(0, 0, dmCanvas.width, dmCanvas.height);
+}
+
+function createDmItem(text, color, x) {
+  return {
+    text,
+    color: color || '#ffffff',
+    x: x !== undefined ? x : dmCanvas.width,
+    y: 30 + Math.random() * (dmCanvas.height - 80),
+    speed: 0.8 + Math.random() * 2.2,
+    size: 22 + Math.random() * 16,
+    opacity: 0.85 + Math.random() * 0.15,
+    alive: true,
+  };
+}
+
+function dmLoop() {
+  if(!dmRunning) return;
+  const ctx = dmCanvas.getContext('2d');
+  ctx.clearRect(0, 0, dmCanvas.width, dmCanvas.height);
+
+  for (let i = dmList.length - 1; i >= 0; i--) {
+    const d = dmList[i];
+    d.x -= d.speed;
+    if (d.x + d.text.length * d.size * 0.55 < -50) { dmList.splice(i, 1); continue; }
+    ctx.save();
+    ctx.font = `bold ${d.size}px "PingFang SC","Microsoft YaHei",sans-serif`;
+    ctx.textBaseline = 'bottom';
+    ctx.shadowColor = 'rgba(0,0,0,.6)';
+    ctx.shadowBlur = 6;
+    ctx.globalAlpha = d.opacity;
+    ctx.fillStyle = d.color;
+    ctx.fillText(d.text, d.x, d.y);
+    ctx.restore();
+  }
+
+  dmRAF = requestAnimationFrame(dmLoop);
+}
+
+async function sendDanmaku() {
+  const text = dmInput.value.trim();
+  if(!text) return;
+  if(!API_BASE) { dmInput.value=''; return; }
+  const color = dmColor.value;
+  const pid = getPhotoId(images[currentIndex]);
+  try {
+    await apiPost('/api/danmaku', { photoId: pid, text, color });
+    // Add to local display immediately
+    dmList.push(createDmItem(text, color));
+    dmInput.value = '';
+  } catch(_){}
+}
+
+dmToggle.addEventListener('change', () => {
+  if(dmToggle.checked) startDanmaku();
+  else stopDanmaku();
+});
+
+dmSend.addEventListener('click', sendDanmaku);
+dmInput.addEventListener('keydown', e => { if(e.key==='Enter') sendDanmaku(); });
+
+// Restart danmaku on photo change when toggled on
+const origUpdateLightbox_dm = updateLightbox;
+updateLightbox = function() {
+  origUpdateLightbox_dm();
+  if(dmToggle.checked) { stopDanmaku(); startDanmaku(); }
+};
+
+// ============================================================
+// Comments
+// ============================================================
+async function loadComments() {
+  commentsArea.innerHTML = '<div class="comment-loading">加载评论…</div>';
+  if(!API_BASE) {
+    commentsArea.innerHTML = '<div class="comment-empty">💬 评论区（需配置 API）</div>';
+    return;
+  }
+  const pid = getPhotoId(images[currentIndex]);
+  try {
+    const data = await apiGet(`/api/comments?photoId=${encodeURIComponent(pid)}`);
+    const comments = data.comments || [];
+    if(comments.length===0){
+      commentsArea.innerHTML = '<div class="comment-empty">还没有评论，来说点什么吧 🐾</div>';
+      return;
+    }
+    commentsArea.innerHTML = comments.map(c => `
+      <div class="comment-item">
+        <div class="meta"><span class="author">${esc(c.author)}</span><span class="time">${formatTime(c.created_at)}</span></div>
+        <div class="text">${esc(c.text)}</div>
+      </div>
+    `).join('');
+  } catch(_){
+    commentsArea.innerHTML = '<div class="comment-empty">评论加载失败</div>';
+  }
+}
+
+async function sendComment() {
+  const text = cmtInput.value.trim();
+  if(!text) return;
+  if(!API_BASE) return;
+  cmtSend.disabled = true;
+  const pid = getPhotoId(images[currentIndex]);
+  try {
+    await apiPost('/api/comments', { photoId: pid, text, author: '匿名' });
+    cmtInput.value = '';
+    loadComments();
+  } catch(_){}
+  cmtSend.disabled = false;
+}
+
+cmtSend.addEventListener('click', sendComment);
+cmtInput.addEventListener('keydown', e => { if(e.key==='Enter' && !e.shiftKey) { e.preventDefault(); sendComment(); }});
+
+function esc(s){ const d=document.createElement('div'); d.textContent=s||''; return d.innerHTML; }
+function formatTime(t){ if(!t) return ''; const d=new Date(t+'Z'); if(isNaN(d))return t.slice(0,16); const now=new Date(); const diff=now-d; if(diff<60000)return'刚刚'; if(diff<3600000)return Math.floor(diff/60000)+'分钟前'; if(diff<86400000)return Math.floor(diff/3600000)+'小时前'; return `${d.getMonth()+1}.${d.getDate()}`; }
+
+// ============================================================
+// Resize handler for canvas
+// ============================================================
+let resizeTimer;
+window.addEventListener('resize', ()=>{
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(()=>{
+    if(lb.classList.contains('active')) initCanvas();
+  }, 200);
+});
+
+// ============================================================
+// Photo loading
+// ============================================================
+async function loadPhotos() {
+  // Try loading from API first (when Worker is deployed)
+  if(API_BASE) {
+    try {
+      const data = await apiGet('/api/photos');
+      if(data.photos && data.photos.length > 0) {
+        images = data.photos.map(p => ({ src: p.url, caption: p.caption, date: p.date }));
+        renderGallery();
+        checkApi();
+        return;
+      }
+    } catch(_){} // fallback to local
+  }
+
+  // Fallback: load from local photos/photos.json
+  try {
+    const resp = await fetch('photos/photos.json');
+    if(resp.ok){
+      const data = await resp.json();
+      images = Object.entries(data).map(([file, info]) => ({
+        src: `photos/${file}`,
+        caption: info.caption || filenameToCaption(file),
+        date: info.date || extractDate(file),
+      }));
+      renderGallery();
+      checkApi();
+      return;
+    }
+  } catch(_){}
+  gallery.innerHTML = '<div class="empty-state"><span class="big">📸</span><h2>还没有照片呢</h2><p>上传你的第一张狗狗照片吧！</p></div>';
+}
+
+async function checkApi() {
+  if(!API_BASE) { console.log('API not configured — social features disabled'); return; }
+  try {
+    await apiGet('/api/health');
+    apiOk = true;
+  } catch(_){ console.log('API unreachable — social features disabled'); }
+}
+
+// ============================================================
+// Upload
+// ============================================================
+const uploadModal = $('uploadModal');
+const uploadOpenBtn = $('uploadOpenBtn');
+const uploadModalClose = $('uploadModalClose');
+const dropzone = $('dropzone');
+const fileInput = $('fileInput');
+const uploadPreview = $('uploadPreview');
+const previewImg = $('previewImg');
+const fileInfo = $('fileInfo');
+const uploadForm = $('uploadForm');
+const captionInput = $('captionInput');
+const uploadSubmit = $('uploadSubmit');
+const uploadCancel = $('uploadCancel');
+const uploadStatus = $('uploadStatus');
+
+let selectedFile = null;
+
+function resetUpload() {
+  selectedFile = null;
+  fileInput.value = '';
+  uploadPreview.classList.remove('show');
+  uploadForm.style.display = 'none';
+  uploadStatus.className = 'upload-status';
+  uploadStatus.textContent = '';
+  uploadSubmit.disabled = false;
+  uploadSubmit.textContent = '上传';
+  dropzone.classList.remove('has-file');
+  dropzone.innerHTML = '<span class="icon">📁</span><p>点击选择照片</p><p class="hint">支持 JPG / PNG / WebP / AVIF / GIF，最大 20MB</p>';
+}
+
+function openUploadModal() {
+  if(!API_BASE) { alert('请先配置 Cloudflare Worker API_BASE 才能上传'); return; }
+  resetUpload();
+  uploadModal.classList.add('active');
+  document.body.style.overflow = 'hidden';
+}
+
+function closeUploadModal() {
+  uploadModal.classList.remove('active');
+  document.body.style.overflow = '';
+}
+
+function handleFile(file) {
+  if(!file) return;
+  const ext = '.' + file.name.split('.').pop().toLowerCase();
+  if(!['.jpg','.jpeg','.png','.webp','.gif','.avif'].includes(ext)) {
+    uploadStatus.className = 'upload-status error';
+    uploadStatus.textContent = '不支持的文件格式，请上传 JPG/PNG/WebP/AVIF/GIF';
+    return;
+  }
+  if(file.size > 20 * 1024 * 1024) {
+    uploadStatus.className = 'upload-status error';
+    uploadStatus.textContent = '照片太大，请压缩到 20MB 以内';
+    return;
+  }
+
+  selectedFile = file;
+  uploadStatus.className = 'upload-status';
+
+  // Preview
+  const reader = new FileReader();
+  reader.onload = e => {
+    previewImg.src = e.target.result;
+    uploadPreview.classList.add('show');
+    uploadForm.style.display = 'flex';
+    dropzone.classList.add('has-file');
+    dropzone.innerHTML = '<span class="icon">✅</span><p>' + file.name + '</p>';
+    fileInfo.textContent = (file.size / 1024 / 1024).toFixed(1) + ' MB';
+  };
+  reader.readAsDataURL(file);
+}
+
+async function doUpload() {
+  if(!selectedFile) return;
+  uploadSubmit.disabled = true;
+  uploadSubmit.textContent = '上传中…';
+  uploadStatus.className = 'upload-status';
+  uploadStatus.innerHTML = '<span class="spinner-sm"></span>正在上传…';
+
+  try {
+    const form = new FormData();
+    form.append('photo', selectedFile);
+    form.append('caption', captionInput.value.trim());
+
+    const url = API_BASE + '/api/photos/upload';
+    const res = await fetch(url, { method: 'POST', body: form });
+    const data = await res.json();
+
+    if(!res.ok) throw new Error(data.error || '上传失败');
+
+    uploadStatus.className = 'upload-status success';
+    uploadStatus.textContent = '✅ 上传成功！';
+
+    // Add new photo to gallery
+    const np = data.photo;
+    images.unshift({ src: np.url, caption: np.caption, date: np.date });
+    renderGallery();
+
+    // Reset form but keep success message
+    selectedFile = null;
+    fileInput.value = '';
+    uploadPreview.classList.remove('show');
+    uploadForm.style.display = 'none';
+    dropzone.classList.remove('has-file');
+    dropzone.innerHTML = '<span class="icon">📁</span><p>点击选择照片</p><p class="hint">支持 JPG / PNG / WebP / AVIF / GIF，最大 20MB</p>';
+
+    setTimeout(() => { uploadStatus.className = 'upload-status'; uploadStatus.textContent = ''; }, 3000);
+  } catch(err) {
+    uploadStatus.className = 'upload-status error';
+    uploadStatus.textContent = '❌ ' + (err.message || '上传失败，请重试');
+  }
+  uploadSubmit.disabled = false;
+  uploadSubmit.textContent = '上传';
+}
+
+// Upload event handlers
+uploadOpenBtn.addEventListener('click', openUploadModal);
+uploadModalClose.addEventListener('click', closeUploadModal);
+uploadModal.addEventListener('click', e => { if(e.target === uploadModal) closeUploadModal(); });
+
+dropzone.addEventListener('click', () => fileInput.click());
+fileInput.addEventListener('change', () => { if(fileInput.files[0]) handleFile(fileInput.files[0]); });
+
+// Drag & drop
+dropzone.addEventListener('dragover', e => { e.preventDefault(); dropzone.style.borderColor = '#b8860b'; dropzone.style.background = '#fefcf7'; });
+dropzone.addEventListener('dragleave', () => { dropzone.style.borderColor = ''; dropzone.style.background = ''; });
+dropzone.addEventListener('drop', e => { e.preventDefault(); dropzone.style.borderColor = ''; dropzone.style.background = ''; if(e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]); });
+
+uploadSubmit.addEventListener('click', doUpload);
+uploadCancel.addEventListener('click', resetUpload);
+
+// ============================================================
+// Init
+// ============================================================
+loadPhotos();
+</script>
+</body>
+</html>
