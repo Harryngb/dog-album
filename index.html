@@ -67,6 +67,8 @@ body{font-family:-apple-system,system-ui,"Segoe UI",Roboto,"Noto Sans SC",sans-s
 .like-btn.liked .heart{color:#e74c3c}
 .like-btn .heart{font-size:1.1rem}
 .like-count{font-weight:500;min-width:12px}
+.delete-btn{margin-left:auto;background:none;border:none;font-size:1rem;cursor:pointer;opacity:.3;transition:opacity .2s;padding:4px 8px}
+.delete-btn:hover{opacity:.8}
 
 /* Emoji reactions */
 .emoji-row{display:flex;gap:6px;padding:10px 20px;border-bottom:1px solid #f0f0f0;flex-wrap:wrap}
@@ -210,6 +212,7 @@ body{font-family:-apple-system,system-ui,"Segoe UI",Roboto,"Noto Sans SC",sans-s
           <span class="like-count" id="likeCount">0</span>
         </button>
         <span style="font-size:.78rem;color:#bbb">点个赞吧</span>
+        <button class="delete-btn" id="deleteBtn" title="删除这张照片">🗑️</button>
       </div>
 
       <!-- Emoji reactions -->
@@ -248,9 +251,9 @@ body{font-family:-apple-system,system-ui,"Segoe UI",Roboto,"Noto Sans SC",sans-s
     <div class="dropzone" id="dropzone">
       <span class="icon">📁</span>
       <p>点击选择照片</p>
-      <p class="hint">支持 JPG / PNG / WebP / AVIF / GIF，最大 20MB</p>
+      <p class="hint">支持 JPG / PNG / WebP / AVIF / GIF，最大 20MB，可多选</p>
     </div>
-    <input type="file" id="fileInput" accept="image/*" hidden>
+    <input type="file" id="fileInput" accept="image/*" multiple hidden>
     <div class="upload-preview" id="uploadPreview">
       <img id="previewImg" alt="预览">
       <p class="info" id="fileInfo"></p>
@@ -415,9 +418,10 @@ async function openLightbox(idx) {
   loadComments();
   stopDanmaku();
 
-  // Show/hide nav buttons
+  // Show/hide nav buttons and delete button
   lbPrev.style.display = images.length > 1 ? '' : 'none';
   lbNext.style.display = images.length > 1 ? '' : 'none';
+  deleteBtn.style.display = API_BASE ? '' : 'none';
 }
 
 function closeLightbox() {
@@ -498,6 +502,34 @@ async function toggleLike() {
 }
 
 likeBtn.addEventListener('click', toggleLike);
+
+const deleteBtn = $('deleteBtn');
+
+async function deleteCurrentPhoto() {
+  if(!API_BASE) return;
+  const item = images[currentIndex];
+  const pid = getPhotoId(item);
+  if(!confirm('确定要删除这张照片吗？删除后无法恢复。')) return;
+
+  try {
+    const res = await fetch(API_BASE + '/api/photos/' + pid, { method: 'DELETE' });
+    if(!res.ok) throw new Error('删除失败');
+    // Remove from array and re-render
+    images.splice(currentIndex, 1);
+    if(images.length === 0) {
+      closeLightbox();
+      renderGallery();
+      return;
+    }
+    if(currentIndex >= images.length) currentIndex = images.length - 1;
+    renderGallery();
+    updateLightbox();
+  } catch(err) {
+    alert('删除失败: ' + err.message);
+  }
+}
+
+deleteBtn.addEventListener('click', deleteCurrentPhoto);
 
 // ============================================================
 // Emoji Reactions
@@ -752,10 +784,10 @@ const uploadSubmit = $('uploadSubmit');
 const uploadCancel = $('uploadCancel');
 const uploadStatus = $('uploadStatus');
 
-let selectedFile = null;
+let selectedFiles = [];
 
 function resetUpload() {
-  selectedFile = null;
+  selectedFiles = [];
   fileInput.value = '';
   uploadPreview.classList.remove('show');
   uploadForm.style.display = 'none';
@@ -764,11 +796,11 @@ function resetUpload() {
   uploadSubmit.disabled = false;
   uploadSubmit.textContent = '上传';
   dropzone.classList.remove('has-file');
-  dropzone.innerHTML = '<span class="icon">📁</span><p>点击选择照片</p><p class="hint">支持 JPG / PNG / WebP / AVIF / GIF，最大 20MB</p>';
+  dropzone.innerHTML = '<span class="icon">📁</span><p>点击选择照片</p><p class="hint">支持 JPG / PNG / WebP / AVIF / GIF，最大 20MB，可多选</p>';
 }
 
 function openUploadModal() {
-  if(!API_BASE) { alert('请先配置 Cloudflare Worker API_BASE 才能上传'); return; }
+  if(!API_BASE) { alert('请先配置 Cloudflare Worker 才能上传'); return; }
   resetUpload();
   uploadModal.classList.add('active');
   document.body.style.overflow = 'hidden';
@@ -779,91 +811,109 @@ function closeUploadModal() {
   document.body.style.overflow = '';
 }
 
-function handleFile(file) {
-  if(!file) return;
-  const ext = '.' + file.name.split('.').pop().toLowerCase();
-  if(!['.jpg','.jpeg','.png','.webp','.gif','.avif'].includes(ext)) {
-    uploadStatus.className = 'upload-status error';
-    uploadStatus.textContent = '不支持的文件格式，请上传 JPG/PNG/WebP/AVIF/GIF';
-    return;
+function handleFiles(files) {
+  if(!files || files.length === 0) return;
+  const valid = [];
+  const errors = [];
+
+  for(const file of files) {
+    const ext = '.' + file.name.split('.').pop().toLowerCase();
+    if(!['.jpg','.jpeg','.png','.webp','.gif','.avif'].includes(ext)) {
+      errors.push(`${file.name}: 不支持的文件格式`);
+      continue;
+    }
+    if(file.size > 20 * 1024 * 1024) {
+      errors.push(`${file.name}: 超过 20MB`);
+      continue;
+    }
+    valid.push(file);
   }
-  if(file.size > 20 * 1024 * 1024) {
+
+  if(valid.length === 0) {
     uploadStatus.className = 'upload-status error';
-    uploadStatus.textContent = '照片太大，请压缩到 20MB 以内';
+    uploadStatus.textContent = '没有可上传的文件，请检查格式和大小';
     return;
   }
 
-  selectedFile = file;
+  selectedFiles = valid;
   uploadStatus.className = 'upload-status';
+  if(errors.length) uploadStatus.textContent = errors.join(' | ');
 
-  // Preview
-  const reader = new FileReader();
-  reader.onload = e => {
-    previewImg.src = e.target.result;
-    uploadPreview.classList.add('show');
-    uploadForm.style.display = 'flex';
-    dropzone.classList.add('has-file');
-    dropzone.innerHTML = '<span class="icon">✅</span><p>' + file.name + '</p>';
-    fileInfo.textContent = (file.size / 1024 / 1024).toFixed(1) + ' MB';
-  };
-  reader.readAsDataURL(file);
+  previewImg.src = '';
+  uploadPreview.classList.add('show');
+  uploadForm.style.display = 'flex';
+  dropzone.classList.add('has-file');
+  const totalMB = valid.reduce((s,f)=>s+f.size,0) / 1024 / 1024;
+  dropzone.innerHTML = `<span class="icon">✅</span><p>已选 ${valid.length} 张照片</p>`;
+  fileInfo.textContent = `${valid.length} 张，共 ${totalMB.toFixed(1)} MB`;
+  uploadSubmit.textContent = `上传 ${valid.length} 张`;
 }
 
 async function doUpload() {
-  if(!selectedFile) return;
+  if(selectedFiles.length === 0) return;
+  const total = selectedFiles.length;
+  let success = 0, fail = 0;
+
   uploadSubmit.disabled = true;
   uploadSubmit.textContent = '上传中…';
   uploadStatus.className = 'upload-status';
-  uploadStatus.innerHTML = '<span class="spinner-sm"></span>正在上传…';
+  uploadStatus.innerHTML = `<span class="spinner-sm"></span>0/${total} 上传中…`;
 
-  try {
-    const form = new FormData();
-    form.append('photo', selectedFile);
-    form.append('caption', captionInput.value.trim());
+  for(let i = 0; i < total; i++) {
+    const file = selectedFiles[i];
+    uploadStatus.innerHTML = `<span class="spinner-sm"></span>${i+1}/${total} ${file.name}`;
 
-    const url = API_BASE + '/api/photos/upload';
-    const res = await fetch(url, { method: 'POST', body: form });
-    const data = await res.json();
+    try {
+      const form = new FormData();
+      form.append('photo', file);
+      form.append('caption', captionInput.value.trim());
 
-    if(!res.ok) throw new Error(data.error || '上传失败');
+      const res = await fetch(API_BASE + '/api/photos/upload', { method: 'POST', body: form });
+      const data = await res.json();
+      if(!res.ok) throw new Error(data.error || '上传失败');
 
-    uploadStatus.className = 'upload-status success';
-    uploadStatus.textContent = '✅ 上传成功！';
-
-    // Add new photo to gallery
-    const np = data.photo;
-    images.unshift({ src: np.url, caption: np.caption, date: np.date });
-    renderGallery();
-
-    // Reset form but keep success message
-    selectedFile = null;
-    fileInput.value = '';
-    uploadPreview.classList.remove('show');
-    uploadForm.style.display = 'none';
-    dropzone.classList.remove('has-file');
-    dropzone.innerHTML = '<span class="icon">📁</span><p>点击选择照片</p><p class="hint">支持 JPG / PNG / WebP / AVIF / GIF，最大 20MB</p>';
-
-    setTimeout(() => { uploadStatus.className = 'upload-status'; uploadStatus.textContent = ''; }, 3000);
-  } catch(err) {
-    uploadStatus.className = 'upload-status error';
-    uploadStatus.textContent = '❌ ' + (err.message || '上传失败，请重试');
+      const np = data.photo;
+      images.unshift({ src: np.url, caption: np.caption, date: np.date });
+      success++;
+    } catch(err) {
+      fail++;
+    }
   }
+
+  renderGallery();
+
+  if(fail === 0) {
+    uploadStatus.className = 'upload-status success';
+    uploadStatus.textContent = `✅ ${success} 张照片上传成功！`;
+  } else {
+    uploadStatus.className = 'upload-status ' + (success > 0 ? 'success' : 'error');
+    uploadStatus.textContent = `${success} 张成功，${fail} 张失败`;
+  }
+
+  selectedFiles = [];
+  fileInput.value = '';
+  uploadPreview.classList.remove('show');
+  uploadForm.style.display = 'none';
+  dropzone.classList.remove('has-file');
+  dropzone.innerHTML = '<span class="icon">📁</span><p>点击选择照片</p><p class="hint">支持 JPG / PNG / WebP / AVIF / GIF，最大 20MB，可多选</p>';
   uploadSubmit.disabled = false;
   uploadSubmit.textContent = '上传';
+  setTimeout(() => { uploadStatus.className = 'upload-status'; uploadStatus.textContent = ''; }, 4000);
 }
 
-// Upload event handlers
 uploadOpenBtn.addEventListener('click', openUploadModal);
 uploadModalClose.addEventListener('click', closeUploadModal);
 uploadModal.addEventListener('click', e => { if(e.target === uploadModal) closeUploadModal(); });
 
 dropzone.addEventListener('click', () => fileInput.click());
-fileInput.addEventListener('change', () => { if(fileInput.files[0]) handleFile(fileInput.files[0]); });
+fileInput.addEventListener('change', () => { if(fileInput.files.length) handleFiles([...fileInput.files]); });
 
-// Drag & drop
 dropzone.addEventListener('dragover', e => { e.preventDefault(); dropzone.style.borderColor = '#b8860b'; dropzone.style.background = '#fefcf7'; });
 dropzone.addEventListener('dragleave', () => { dropzone.style.borderColor = ''; dropzone.style.background = ''; });
-dropzone.addEventListener('drop', e => { e.preventDefault(); dropzone.style.borderColor = ''; dropzone.style.background = ''; if(e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]); });
+dropzone.addEventListener('drop', e => {
+  e.preventDefault(); dropzone.style.borderColor = ''; dropzone.style.background = '';
+  if(e.dataTransfer.files.length) handleFiles([...e.dataTransfer.files]);
+});
 
 uploadSubmit.addEventListener('click', doUpload);
 uploadCancel.addEventListener('click', resetUpload);
