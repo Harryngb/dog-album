@@ -811,30 +811,27 @@ function closeUploadModal() {
   document.body.style.overflow = '';
 }
 
-// Client-side image compression
-function compressImage(file, maxW=1920, quality=.85) {
-  return new Promise((resolve, reject) => {
+// Client-side image compression (fast path: URL.createObjectURL instead of base64)
+function compressImage(file) {
+  // Skip small files
+  if(file.size < 300 * 1024) return Promise.resolve(file);
+  const maxW = 1200, quality = 0.72;
+  return new Promise(resolve => {
+    const url = URL.createObjectURL(file);
     const img = new Image();
     img.onload = () => {
+      URL.revokeObjectURL(url);
       let w = img.width, h = img.height;
-      if(w > maxW || h > maxW) {
-        if(w > h) { h = h * maxW / w; w = maxW; }
-        else { w = w * maxW / h; h = maxW; }
-      }
+      if(w <= maxW && h <= maxW && file.type !== 'image/png') { resolve(file); return; }
+      if(w > maxW) { h = h * maxW / w; w = maxW; }
+      if(h > maxW) { w = w * maxW / h; h = maxW; }
       const c = document.createElement('canvas');
       c.width = w; c.height = h;
-      const ctx = c.getContext('2d');
-      ctx.drawImage(img, 0, 0, w, h);
-      c.toBlob(blob => {
-        if(blob) resolve(new File([blob], file.name.replace(/\.[^.]+$/, '.jpg'), { type: 'image/jpeg' }));
-        else resolve(file); // fallback if compression fails
-      }, 'image/jpeg', quality);
+      c.getContext('2d').drawImage(img, 0, 0, w, h);
+      c.toBlob(b => resolve(b ? new File([b], file.name.replace(/\.[^.]+$/, '.jpg'), {type:'image/jpeg'}) : file), 'image/jpeg', quality);
     };
-    img.onerror = () => resolve(file);
-    const reader = new FileReader();
-    reader.onload = e => { img.src = e.target.result; };
-    reader.onerror = () => resolve(file);
-    reader.readAsDataURL(file);
+    img.onerror = () => { URL.revokeObjectURL(url); resolve(file); };
+    img.src = url;
   });
 }
 
@@ -886,28 +883,36 @@ async function doUpload() {
   uploadStatus.className = 'upload-status';
   uploadStatus.innerHTML = `<span class="spinner-sm"></span>0/${total} 上传中…`;
 
-  for(let i = 0; i < total; i++) {
-    const file = selectedFiles[i];
-    uploadStatus.innerHTML = `<span class="spinner-sm"></span>${i+1}/${total} 压缩中: ${file.name}`;
+  // Compress all in parallel (fast)
+  uploadStatus.innerHTML = `<span class="spinner-sm"></span>压缩 ${total} 张…`;
+  const compressed = await Promise.all(selectedFiles.map(f => compressImage(f)));
 
-    try {
-      // Compress before upload (much faster)
-      const compressed = await compressImage(file);
-      uploadStatus.innerHTML = `<span class="spinner-sm"></span>${i+1}/${total} 上传中: ${file.name}`;
-      const form = new FormData();
-      form.append('photo', compressed);
-      form.append('caption', captionInput.value.trim());
+  // Upload 3 at a time (parallel)
+  const CONCURRENT = 3;
+  for(let i = 0; i < total; i += CONCURRENT) {
+    const batch = compressed.slice(i, i + CONCURRENT);
+    const batchResults = await Promise.all(batch.map(async (file, j) => {
+      const idx = i + j;
+      try {
+        const form = new FormData();
+        form.append('photo', file);
+        form.append('caption', captionInput.value.trim());
+        const res = await fetch(API_BASE + '/api/photos/upload', { method: 'POST', body: form });
+        const data = await res.json();
+        if(!res.ok) throw new Error(data.error || '上传失败');
+        return { ok: true, photo: data.photo };
+      } catch(err) {
+        return { ok: false };
+      }
+    }));
 
-      const res = await fetch(API_BASE + '/api/photos/upload', { method: 'POST', body: form });
-      const data = await res.json();
-      if(!res.ok) throw new Error(data.error || '上传失败');
-
-      const np = data.photo;
-      images.unshift({ src: np.url, caption: np.caption, date: np.date });
-      success++;
-    } catch(err) {
-      fail++;
+    for(const r of batchResults) {
+      if(r.ok) { images.unshift({ src: r.photo.url, caption: r.photo.caption, date: r.photo.date }); success++; }
+      else fail++;
     }
+
+    const done = Math.min(i + CONCURRENT, total);
+    uploadStatus.innerHTML = `<span class="spinner-sm"></span>${done}/${total}`;
   }
 
   renderGallery();
