@@ -427,8 +427,12 @@ async function saveDataJson(modifier) {
   }
 }
 
-// Save photosData to GitHub (no retry — photos are safely in the repo if this fails)
+// Save photosData to GitHub (resolves SHA first if needed)
 async function savePhotosJson() {
+  if (!photosSha) {
+    const existing = await ghGetFile('photos.json');
+    if (existing) photosSha = existing.sha;
+  }
   const result = await ghPutFile('photos.json', JSON.stringify(photosData, null, 2), photosSha);
   photosSha = result.content.sha;
 }
@@ -828,16 +832,18 @@ async function loadPhotos() {
   // Try GitHub API (authenticated, gets SHA for writing)
   try {
     const result = await ghGetJson('photos.json');
-    if (result && result.data && result.data.length > 0) {
-      photosData = result.data;
+    if (result) {
       photosSha = result.sha;
-      images = photosData.map(p => ({
-        src: `${RAW_URL}/photos/${p.id}${p.ext}`,
-        caption: p.caption || '',
-        date: p.date || '',
-        id: p.id,
-      }));
-      loaded = true;
+      if (result.data && result.data.length > 0) {
+        photosData = result.data;
+        images = photosData.map(p => ({
+          src: `${RAW_URL}/photos/${p.id}${p.ext}`,
+          caption: p.caption || '',
+          date: p.date || '',
+          id: p.id,
+        }));
+        loaded = true;
+      }
     }
   } catch(e) { /* fall through */ }
 
