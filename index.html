@@ -251,7 +251,7 @@ body{font-family:-apple-system,system-ui,"Segoe UI",Roboto,"Noto Sans SC",sans-s
     <div class="dropzone" id="dropzone">
       <span class="icon">📁</span>
       <p>点击选择照片</p>
-      <p class="hint">支持 JPG / PNG / WebP / AVIF / GIF，可多选（自动压缩到 1920px）</p>
+      <p class="hint">支持 JPG / PNG / WebP / AVIF / GIF，可多选（自动压缩到 1200px）</p>
     </div>
     <input type="file" id="fileInput" accept="image/*" multiple hidden>
     <div class="upload-preview" id="uploadPreview">
@@ -273,9 +273,20 @@ body{font-family:-apple-system,system-ui,"Segoe UI",Roboto,"Noto Sans SC",sans-s
 
 <script>
 // ============================================================
-// CONFIG — 部署时把这里改成你的 Cloudflare Worker 地址
+// CONFIG — GitHub API
+// 注意: Token 暴露在客户端代码中，仅限 dog-album 仓库的 Contents 读写权限。
 // ============================================================
-const API_BASE = 'https://dog-album-api.shenfu0124.workers.dev';
+const GH_TOKEN = '3Dc9VMpIe6nJw3hXerasAPXwL51';
+const GH_OWNER = 'Harryngb';
+const GH_REPO = 'dog-album';
+const GH_BRANCH = 'main';
+
+const PAGE_URL = `https://${GH_OWNER}.github.io/${GH_REPO}`;
+const RAW_URL = `https://raw.githubusercontent.com/${GH_OWNER}/${GH_REPO}/${GH_BRANCH}`;
+const API_URL = `https://api.github.com/repos/${GH_OWNER}/${GH_REPO}`;
+const GH_HEADERS = { Authorization: `Bearer ${GH_TOKEN}`, Accept: 'application/vnd.github+json' };
+const GH_JSON = { ...GH_HEADERS, 'Content-Type': 'application/json' };
+
 const VISITOR_ID = localStorage.getItem('vid') || (localStorage.setItem('vid', crypto.randomUUID()), localStorage.getItem('vid'));
 const EMOJIS = ['🐶','🥰','😍','😂','🐾','❤️'];
 
@@ -307,16 +318,20 @@ const cmtSend = $('cmtSend');
 
 let images = [];
 let currentIndex = 0;
-let apiOk = false;
 let likeState = { liked: false, count: 0 };
 let dmItems = [];
+
+// In-memory data cache
+let photosData = [];     // Array of {id, filename, caption, date, ext}
+let photosSha = null;
+let socialData = { likes: {}, comments: {}, danmaku: {}, reactions: {} };
+let socialSha = null;
 
 // ============================================================
 // Utility
 // ============================================================
 function filenameToCaption(filename) {
   let n = filename.replace(/\.[^.]+$/, '').replace(/[-_]+/g, ' ');
-  // remove leading date if present
   n = n.replace(/^\d{4}\.?\d{2}\.?\d{2}\s*/, '');
   return n.charAt(0).toUpperCase() + n.slice(1) || '🐶';
 }
@@ -324,10 +339,7 @@ function extractDate(filename) {
   const m = filename.match(/(\d{4})[-_.]?(\d{2})[-_.]?(\d{2})/);
   return m ? `${m[1]}.${m[2]}.${m[3]}` : '';
 }
-function getImg(item){
-  const src = typeof item === 'string' ? item : item.src;
-  return src.startsWith('/photos/') && API_BASE ? API_BASE + src : src;
-}
+function getImg(item){ return typeof item === 'string' ? item : item.src; }
 function getCaption(item){
   if(typeof item === 'string') return filenameToCaption(item.split('/').pop());
   return item.caption || filenameToCaption(item.src.split('/').pop());
@@ -336,20 +348,90 @@ function getDate(item){
   if(typeof item === 'object' && item.date) return item.date;
   return extractDate(typeof item === 'string' ? item : item.src);
 }
-function getPhotoId(item){return (typeof item === 'string' ? item : item.src).split('/').pop()}
+function getPhotoId(item){ return typeof item === 'object' && item.id ? item.id : (typeof item === 'string' ? item : item.src).split('/').pop(); }
 
 // ============================================================
-// API helper
+// GitHub API helpers
 // ============================================================
-async function api(path, opts={}){
-  if(!API_BASE) throw new Error('API not configured');
-  const url = API_BASE + path;
-  const res = await fetch(url, { headers:{'Content-Type':'application/json'}, ...opts });
-  if(!res.ok){ const e=await res.text(); throw new Error(e); }
-  return res.json();
+function ghEncode(str) { return btoa(unescape(encodeURIComponent(str))); }
+function ghDecode(content) { return decodeURIComponent(escape(atob(content.replace(/\n/g, '')))); }
+
+// Get file info (content + sha) from GitHub
+async function ghGetFile(path) {
+  const resp = await fetch(`${API_URL}/contents/${path}?ref=${GH_BRANCH}`, { headers: GH_HEADERS });
+  if (resp.status === 404) return null;
+  if (!resp.ok) throw new Error(`GitHub API ${resp.status}: ${(await resp.json()).message}`);
+  return resp.json();
 }
-function apiGet(path){ return api(path) }
-function apiPost(path, body){ return api(path, {method:'POST',body:JSON.stringify(body)}) }
+
+// Get and parse JSON file
+async function ghGetJson(path) {
+  const file = await ghGetFile(path);
+  if (!file) return null;
+  return { data: JSON.parse(ghDecode(file.content)), sha: file.sha };
+}
+
+// Create or update a file. For binary, pass base64 content with isBinary=true.
+async function ghPutFile(path, content, sha, isBinary) {
+  const body = { message: `Update ${path}`, branch: GH_BRANCH, content: isBinary ? content : ghEncode(content) };
+  if (sha) body.sha = sha;
+  const resp = await fetch(`${API_URL}/contents/${path}`, {
+    method: 'PUT', headers: GH_JSON, body: JSON.stringify(body),
+  });
+  if (!resp.ok) throw new Error(`GitHub API ${resp.status}: ${(await resp.json()).message}`);
+  return resp.json();
+}
+
+// Delete a file
+async function ghDeleteFile(path, sha) {
+  if (!sha) { const f = await ghGetFile(path); if (!f) return; sha = f.sha; }
+  const resp = await fetch(`${API_URL}/contents/${path}`, {
+    method: 'DELETE', headers: GH_JSON,
+    body: JSON.stringify({ message: `Delete ${path}`, branch: GH_BRANCH, sha }),
+  });
+  if (!resp.ok) throw new Error(`GitHub API ${resp.status}: ${(await resp.json()).message}`);
+}
+
+// Convert a Blob to base64 string
+function blobToBase64(blob) {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(r.result.split(',')[1]);
+    r.onerror = reject;
+    r.readAsDataURL(blob);
+  });
+}
+
+// ============================================================
+// Data persistence
+// ============================================================
+
+// Save socialData to GitHub, with retry on conflict
+async function saveDataJson(modifier) {
+  if (modifier) modifier(socialData);
+  let retries = 3;
+  while (retries > 0) {
+    try {
+      const result = await ghPutFile('data.json', JSON.stringify(socialData, null, 2), socialSha);
+      socialSha = result.content.sha;
+      return;
+    } catch (e) {
+      retries--;
+      if (retries === 0) throw e;
+      // Conflict — re-read latest and re-apply
+      const refreshed = await ghGetJson('data.json');
+      if (refreshed) { socialData = refreshed.data; socialSha = refreshed.sha; }
+      else { socialData = { likes: {}, comments: {}, danmaku: {}, reactions: {} }; socialSha = null; }
+      if (modifier) modifier(socialData);
+    }
+  }
+}
+
+// Save photosData to GitHub (no retry — photos are safely in the repo if this fails)
+async function savePhotosJson() {
+  const result = await ghPutFile('photos.json', JSON.stringify(photosData, null, 2), photosSha);
+  photosSha = result.content.sha;
+}
 
 // ============================================================
 // Gallery
@@ -358,8 +440,6 @@ function buildPhotoCard(item, idx) {
   const src = getImg(item);
   const caption = getCaption(item);
   const date = getDate(item);
-  const pid = getPhotoId(item);
-
   const card = document.createElement('div');
   card.className = 'photo-card';
   card.innerHTML = `
@@ -373,7 +453,7 @@ function buildPhotoCard(item, idx) {
 
 function renderGallery(){
   if(images.length===0){
-    gallery.innerHTML='<div class="empty-state"><span class="big">📸</span><h2>还没有照片呢</h2><p>把你的狗狗照片放到 <code>photos/</code> 文件夹里</p></div>';
+    gallery.innerHTML='<div class="empty-state"><span class="big">📸</span><h2>还没有照片呢</h2><p>上传你的第一张狗狗照片吧！</p></div>';
     return;
   }
   gallery.innerHTML='';
@@ -381,21 +461,15 @@ function renderGallery(){
   loadGalleryStats();
 }
 
-// Batch load likes for gallery badges
-async function loadGalleryStats() {
-  if(!API_BASE) return;
-  const ids = images.map((item,i)=>({idx:i,pid:getPhotoId(item)}));
-  try {
-    const pids = ids.map(d=>d.pid).join(',');
-    const data = await apiGet(`/api/likes?photoIds=${encodeURIComponent(pids)}&visitorId=${VISITOR_ID}`);
-    ids.forEach(({idx,pid})=>{
-      const badge = document.getElementById(`badge-${idx}`);
-      if(!badge) return;
-      const c = data.counts?.[pid] || 0;
-      const liked = data.liked?.includes(pid);
-      badge.innerHTML = `${liked ? '❤️' : '🤍'} ${c}`;
-    });
-  } catch(_){}
+function loadGalleryStats() {
+  images.forEach((item, idx) => {
+    const badge = document.getElementById(`badge-${idx}`);
+    if (!badge) return;
+    const pid = item.id;
+    const likes = socialData.likes?.[pid] || [];
+    const liked = likes.includes(VISITOR_ID);
+    badge.innerHTML = `${liked ? '❤️' : '🤍'} ${likes.length}`;
+  });
 }
 
 // ============================================================
@@ -418,10 +492,9 @@ async function openLightbox(idx) {
   loadComments();
   stopDanmaku();
 
-  // Show/hide nav buttons and delete button
   lbPrev.style.display = images.length > 1 ? '' : 'none';
   lbNext.style.display = images.length > 1 ? '' : 'none';
-  deleteBtn.style.display = API_BASE ? '' : 'none';
+  deleteBtn.style.display = '';
 }
 
 function closeLightbox() {
@@ -472,33 +545,37 @@ lbImageArea.addEventListener('touchend',e=>{
 // ============================================================
 // Like
 // ============================================================
-async function loadLikeState() {
-  likeBtn.className='like-btn';
-  likeCount.textContent='…';
-  if(!API_BASE) { likeCount.textContent='0'; return; }
+function loadLikeState() {
   const pid = getPhotoId(images[currentIndex]);
-  try {
-    const data = await apiGet(`/api/likes?photoId=${encodeURIComponent(pid)}&visitorId=${VISITOR_ID}`);
-    likeState = { liked: data.liked, count: data.count };
-    likeBtn.classList.toggle('liked', data.liked);
-    likeBtn.querySelector('.heart').textContent = data.liked ? '❤️' : '🤍';
-    likeCount.textContent = data.count;
-  } catch(_){ likeCount.textContent='0'; }
+  const likes = socialData.likes?.[pid] || [];
+  const liked = likes.includes(VISITOR_ID);
+  likeState = { liked, count: likes.length };
+  likeBtn.classList.toggle('liked', liked);
+  likeBtn.querySelector('.heart').textContent = liked ? '❤️' : '🤍';
+  likeCount.textContent = likes.length;
 }
 
 async function toggleLike() {
-  if(!API_BASE) return;
   const pid = getPhotoId(images[currentIndex]);
   try {
-    const data = await apiPost('/api/like', { photoId: pid, visitorId: VISITOR_ID });
-    likeState = { liked: data.liked, count: data.count };
-    likeBtn.classList.toggle('liked', data.liked);
-    likeBtn.querySelector('.heart').textContent = data.liked ? '❤️' : '🤍';
-    likeCount.textContent = data.count;
-    // Update gallery badge
+    await saveDataJson((data) => {
+      const likes = data.likes[pid] || [];
+      const idx = likes.indexOf(VISITOR_ID);
+      if (idx >= 0) likes.splice(idx, 1);
+      else likes.push(VISITOR_ID);
+      data.likes[pid] = likes;
+    });
+    const likes = socialData.likes[pid] || [];
+    const liked = likes.includes(VISITOR_ID);
+    likeState = { liked, count: likes.length };
+    likeBtn.classList.toggle('liked', liked);
+    likeBtn.querySelector('.heart').textContent = liked ? '❤️' : '🤍';
+    likeCount.textContent = likes.length;
     const badge = document.getElementById(`badge-${currentIndex}`);
-    if(badge) badge.innerHTML = `${data.liked ? '❤️' : '🤍'} ${data.count}`;
-  } catch(_){}
+    if (badge) badge.innerHTML = `${liked ? '❤️' : '🤍'} ${likes.length}`;
+  } catch(e) {
+    console.error('点赞失败', e);
+  }
 }
 
 likeBtn.addEventListener('click', toggleLike);
@@ -506,22 +583,35 @@ likeBtn.addEventListener('click', toggleLike);
 const deleteBtn = $('deleteBtn');
 
 async function deleteCurrentPhoto() {
-  if(!API_BASE) return;
   const item = images[currentIndex];
-  const pid = getPhotoId(item);
-  if(!confirm('确定要删除这张照片吗？删除后无法恢复。')) return;
+  const pid = item.id;
+  const ext = photosData.find(p => p.id === pid)?.ext || '.jpg';
+  if (!confirm('确定要删除这张照片吗？删除后无法恢复。')) return;
 
   try {
-    const res = await fetch(API_BASE + '/api/photos/' + pid, { method: 'DELETE' });
-    if(!res.ok) throw new Error('删除失败');
-    // Remove from array and re-render
+    // Delete photo file from repo
+    const fileInfo = await ghGetFile(`photos/${pid}${ext}`);
+    if (fileInfo) await ghDeleteFile(`photos/${pid}${ext}`, fileInfo.sha);
+
+    // Remove from photosData
+    const idx = photosData.findIndex(p => p.id === pid);
+    if (idx >= 0) photosData.splice(idx, 1);
+
+    // Save updated photos.json
+    try { await savePhotosJson(); } catch(e) { console.error('保存照片列表失败', e); }
+
+    // Clean social data for this photo
+    await saveDataJson((data) => {
+      delete data.likes[pid];
+      delete data.comments[pid];
+      delete data.danmaku[pid];
+      delete data.reactions[pid];
+    });
+
+    // Update UI
     images.splice(currentIndex, 1);
-    if(images.length === 0) {
-      closeLightbox();
-      renderGallery();
-      return;
-    }
-    if(currentIndex >= images.length) currentIndex = images.length - 1;
+    if (images.length === 0) { closeLightbox(); renderGallery(); return; }
+    if (currentIndex >= images.length) currentIndex = images.length - 1;
     renderGallery();
     updateLightbox();
   } catch(err) {
@@ -536,15 +626,17 @@ deleteBtn.addEventListener('click', deleteCurrentPhoto);
 // ============================================================
 let myReactions = [];
 
-async function loadReactions() {
-  emojiRow.innerHTML = '<span style="font-size:.78rem;color:#ccc">加载中…</span>';
-  if(!API_BASE) { renderEmojiRow({}); return; }
+function loadReactions() {
   const pid = getPhotoId(images[currentIndex]);
-  try {
-    const data = await apiGet(`/api/reactions?photoId=${encodeURIComponent(pid)}&visitorId=${VISITOR_ID}`);
-    myReactions = data.myReactions || [];
-    renderEmojiRow(data.reactions || {});
-  } catch(_){ renderEmojiRow({}); }
+  const all = socialData.reactions?.[pid] || {};
+  myReactions = [];
+  // Compute which emojis the current visitor has reacted with
+  for (const [emoji, visitors] of Object.entries(all)) {
+    if (visitors.includes(VISITOR_ID)) myReactions.push(emoji);
+  }
+  const counts = {};
+  for (const [emoji, visitors] of Object.entries(all)) counts[emoji] = visitors.length;
+  renderEmojiRow(counts);
 }
 
 function renderEmojiRow(counts) {
@@ -560,13 +652,19 @@ function renderEmojiRow(counts) {
 }
 
 async function toggleReaction(emoji) {
-  if(!API_BASE) return;
   const pid = getPhotoId(images[currentIndex]);
   try {
-    const data = await apiPost('/api/reaction', { photoId: pid, emoji, visitorId: VISITOR_ID });
-    // Reload all reactions
+    await saveDataJson((data) => {
+      if (!data.reactions[pid]) data.reactions[pid] = {};
+      const visitors = data.reactions[pid][emoji] || [];
+      const idx = visitors.indexOf(VISITOR_ID);
+      if (idx >= 0) visitors.splice(idx, 1);
+      else visitors.push(VISITOR_ID);
+      if (visitors.length === 0) delete data.reactions[pid][emoji];
+      else data.reactions[pid][emoji] = visitors;
+    });
     loadReactions();
-  } catch(_){}
+  } catch(e) { console.error('反应失败', e); }
 }
 
 // ============================================================
@@ -583,12 +681,11 @@ function initCanvas() {
 }
 
 function startDanmaku() {
-  if(!API_BASE || dmRunning) return;
+  if (dmRunning) return;
   dmRunning = true;
   const pid = getPhotoId(images[currentIndex]);
-  apiGet(`/api/danmaku?photoId=${encodeURIComponent(pid)}`).then(data => {
-    dmList = (data.danmaku || []).map(d => createDmItem(d.text, d.color));
-  }).catch(()=>{});
+  const items = socialData.danmaku?.[pid] || [];
+  dmList = items.map(d => createDmItem(d.text, d.color));
   dmRAF = requestAnimationFrame(dmLoop);
 }
 
@@ -639,15 +736,16 @@ function dmLoop() {
 async function sendDanmaku() {
   const text = dmInput.value.trim();
   if(!text) return;
-  if(!API_BASE) { dmInput.value=''; return; }
   const color = dmColor.value;
   const pid = getPhotoId(images[currentIndex]);
   try {
-    await apiPost('/api/danmaku', { photoId: pid, text, color });
-    // Add to local display immediately
+    await saveDataJson((data) => {
+      if (!data.danmaku[pid]) data.danmaku[pid] = [];
+      data.danmaku[pid].push({ text, color, created_at: new Date().toISOString() });
+    });
     dmList.push(createDmItem(text, color));
     dmInput.value = '';
-  } catch(_){}
+  } catch(e) { console.error('弹幕发送失败', e); }
 }
 
 dmToggle.addEventListener('change', () => {
@@ -668,42 +766,39 @@ updateLightbox = function() {
 // ============================================================
 // Comments
 // ============================================================
-async function loadComments() {
-  commentsArea.innerHTML = '<div class="comment-loading">加载评论…</div>';
-  if(!API_BASE) {
-    commentsArea.innerHTML = '<div class="comment-empty">💬 评论区（需配置 API）</div>';
+function loadComments() {
+  const pid = getPhotoId(images[currentIndex]);
+  const comments = socialData.comments?.[pid] || [];
+  if (comments.length === 0) {
+    commentsArea.innerHTML = '<div class="comment-empty">还没有评论，来说点什么吧 🐾</div>';
     return;
   }
-  const pid = getPhotoId(images[currentIndex]);
-  try {
-    const data = await apiGet(`/api/comments?photoId=${encodeURIComponent(pid)}`);
-    const comments = data.comments || [];
-    if(comments.length===0){
-      commentsArea.innerHTML = '<div class="comment-empty">还没有评论，来说点什么吧 🐾</div>';
-      return;
-    }
-    commentsArea.innerHTML = comments.map(c => `
-      <div class="comment-item">
-        <div class="meta"><span class="author">${esc(c.author)}</span><span class="time">${formatTime(c.created_at)}</span></div>
-        <div class="text">${esc(c.text)}</div>
-      </div>
-    `).join('');
-  } catch(_){
-    commentsArea.innerHTML = '<div class="comment-empty">评论加载失败</div>';
-  }
+  commentsArea.innerHTML = comments.map(c => `
+    <div class="comment-item">
+      <div class="meta"><span class="author">${esc(c.author)}</span><span class="time">${formatTime(c.created_at)}</span></div>
+      <div class="text">${esc(c.text)}</div>
+    </div>
+  `).join('');
 }
 
 async function sendComment() {
   const text = cmtInput.value.trim();
   if(!text) return;
-  if(!API_BASE) return;
   cmtSend.disabled = true;
   const pid = getPhotoId(images[currentIndex]);
   try {
-    await apiPost('/api/comments', { photoId: pid, text, author: '匿名' });
+    await saveDataJson((data) => {
+      if (!data.comments[pid]) data.comments[pid] = [];
+      data.comments[pid].unshift({
+        id: Date.now(),
+        author: '匿名',
+        text,
+        created_at: new Date().toISOString(),
+      });
+    });
     cmtInput.value = '';
     loadComments();
-  } catch(_){}
+  } catch(e) { console.error('评论发送失败', e); }
   cmtSend.disabled = false;
 }
 
@@ -711,7 +806,7 @@ cmtSend.addEventListener('click', sendComment);
 cmtInput.addEventListener('keydown', e => { if(e.key==='Enter' && !e.shiftKey) { e.preventDefault(); sendComment(); }});
 
 function esc(s){ const d=document.createElement('div'); d.textContent=s||''; return d.innerHTML; }
-function formatTime(t){ if(!t) return ''; const d=new Date(t+'Z'); if(isNaN(d))return t.slice(0,16); const now=new Date(); const diff=now-d; if(diff<60000)return'刚刚'; if(diff<3600000)return Math.floor(diff/60000)+'分钟前'; if(diff<86400000)return Math.floor(diff/3600000)+'小时前'; return `${d.getMonth()+1}.${d.getDate()}`; }
+function formatTime(t){ if(!t) return ''; const d=new Date(t); if(isNaN(d))return''; const now=new Date(); const diff=now-d; if(diff<60000)return'刚刚'; if(diff<3600000)return Math.floor(diff/60000)+'分钟前'; if(diff<86400000)return Math.floor(diff/3600000)+'小时前'; return `${d.getMonth()+1}.${d.getDate()}`; }
 
 // ============================================================
 // Resize handler for canvas
@@ -728,43 +823,71 @@ window.addEventListener('resize', ()=>{
 // Photo loading
 // ============================================================
 async function loadPhotos() {
-  // Try loading from API first (when Worker is deployed)
-  if(API_BASE) {
+  let loaded = false;
+
+  // Try GitHub API (authenticated, gets SHA for writing)
+  try {
+    const result = await ghGetJson('photos.json');
+    if (result && result.data && result.data.length > 0) {
+      photosData = result.data;
+      photosSha = result.sha;
+      images = photosData.map(p => ({
+        src: `${RAW_URL}/photos/${p.id}${p.ext}`,
+        caption: p.caption || '',
+        date: p.date || '',
+        id: p.id,
+      }));
+      loaded = true;
+    }
+  } catch(e) { /* fall through */ }
+
+  // Fallback: try GitHub Pages (cached)
+  if (!loaded) {
     try {
-      const data = await apiGet('/api/photos');
-      if(data.photos && data.photos.length > 0) {
-        images = data.photos.map(p => ({ src: p.url, caption: p.caption, date: p.date }));
-        renderGallery();
-        checkApi();
-        return;
+      const resp = await fetch(`${PAGE_URL}/photos.json`);
+      if (resp.ok) {
+        const data = await resp.json();
+        if (data && data.length > 0) {
+          photosData = data;
+          images = data.map(p => ({
+            src: `${RAW_URL}/photos/${p.id}${p.ext}`,
+            caption: p.caption || '',
+            date: p.date || '',
+            id: p.id,
+          }));
+          loaded = true;
+        }
       }
-    } catch(_){} // fallback to local
+    } catch(e) { /* fall through */ }
   }
 
-  // Fallback: load from local photos/photos.json
-  try {
-    const resp = await fetch('photos/photos.json');
-    if(resp.ok){
-      const data = await resp.json();
-      images = Object.entries(data).map(([file, info]) => ({
-        src: `photos/${file}`,
-        caption: info.caption || filenameToCaption(file),
-        date: info.date || extractDate(file),
-      }));
-      renderGallery();
-      checkApi();
-      return;
-    }
-  } catch(_){}
-  gallery.innerHTML = '<div class="empty-state"><span class="big">📸</span><h2>还没有照片呢</h2><p>上传你的第一张狗狗照片吧！</p></div>';
+  if (loaded) {
+    renderGallery();
+  } else {
+    gallery.innerHTML = '<div class="empty-state"><span class="big">📸</span><h2>还没有照片呢</h2><p>上传你的第一张狗狗照片吧！</p></div>';
+  }
+
+  // Load social data in background
+  loadSocialData();
 }
 
-async function checkApi() {
-  if(!API_BASE) { console.log('API not configured — social features disabled'); return; }
+async function loadSocialData() {
   try {
-    await apiGet('/api/health');
-    apiOk = true;
-  } catch(_){ console.log('API unreachable — social features disabled'); }
+    const result = await ghGetJson('data.json');
+    if (result) {
+      socialData = result.data;
+      socialSha = result.sha;
+    }
+  } catch(e) {
+    console.warn('社交数据加载失败', e);
+  }
+  // Update UI with loaded social data
+  loadGalleryStats();
+  if (lb.classList.contains('active')) {
+    loadLikeState();
+    loadReactions();
+    loadComments();
+  }
 }
 
 // ============================================================
@@ -800,7 +923,6 @@ function resetUpload() {
 }
 
 function openUploadModal() {
-  if(!API_BASE) { alert('请先配置 Cloudflare Worker 才能上传'); return; }
   resetUpload();
   uploadModal.classList.add('active');
   document.body.style.overflow = 'hidden';
@@ -811,9 +933,8 @@ function closeUploadModal() {
   document.body.style.overflow = '';
 }
 
-// Client-side image compression (fast path: URL.createObjectURL instead of base64)
+// Client-side image compression
 function compressImage(file) {
-  // Skip small files
   if(file.size < 300 * 1024) return Promise.resolve(file);
   const maxW = 1200, quality = 0.72;
   return new Promise(resolve => {
@@ -877,53 +998,71 @@ async function doUpload() {
   if(selectedFiles.length === 0) return;
   const total = selectedFiles.length;
   let success = 0, fail = 0;
+  const caption = captionInput.value.trim();
 
   uploadSubmit.disabled = true;
   uploadSubmit.textContent = '上传中…';
   uploadStatus.className = 'upload-status';
   uploadStatus.innerHTML = `<span class="spinner-sm"></span>0/${total} 上传中…`;
 
-  // Compress all in parallel (fast)
+  // Step 1: Compress all in parallel
   uploadStatus.innerHTML = `<span class="spinner-sm"></span>压缩 ${total} 张…`;
   const compressed = await Promise.all(selectedFiles.map(f => compressImage(f)));
 
-  // Upload 3 at a time (parallel)
+  // Step 2: Upload each photo to GitHub and build new photosData entries
+  const newEntries = [];
   const CONCURRENT = 3;
-  for(let i = 0; i < total; i += CONCURRENT) {
+
+  for (let i = 0; i < total; i += CONCURRENT) {
     const batch = compressed.slice(i, i + CONCURRENT);
-    const batchResults = await Promise.all(batch.map(async (file, j) => {
-      const idx = i + j;
-      try {
-        const form = new FormData();
-        form.append('photo', file);
-        form.append('caption', captionInput.value.trim());
-        const res = await fetch(API_BASE + '/api/photos/upload', { method: 'POST', body: form });
-        const data = await res.json();
-        if(!res.ok) throw new Error(data.error || '上传失败');
-        return { ok: true, photo: data.photo };
-      } catch(err) {
-        return { ok: false };
-      }
+    const batchResults = await Promise.allSettled(batch.map(async (file) => {
+      const id = Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 6);
+      const ext = '.jpg'; // All compressed files are JPEG
+      const base64 = await blobToBase64(file);
+      await ghPutFile(`photos/${id}${ext}`, base64, null, true);
+      return { id, filename: file.name, caption, date: new Date().toISOString().slice(0, 10), ext };
     }));
 
-    for(const r of batchResults) {
-      if(r.ok) { images.unshift({ src: r.photo.url, caption: r.photo.caption, date: r.photo.date }); success++; }
-      else fail++;
+    for (const r of batchResults) {
+      if (r.status === 'fulfilled') { newEntries.push(r.value); success++; }
+      else { fail++; console.error('上传失败', r.reason); }
     }
 
     const done = Math.min(i + CONCURRENT, total);
     uploadStatus.innerHTML = `<span class="spinner-sm"></span>${done}/${total}`;
   }
 
+  if (success === 0) {
+    uploadStatus.className = 'upload-status error';
+    uploadStatus.textContent = '❌ 全部上传失败，请重试';
+    uploadSubmit.disabled = false;
+    uploadSubmit.textContent = '上传';
+    return;
+  }
+
+  // Step 3: Update photos.json
+  uploadStatus.innerHTML = `<span class="spinner-sm"></span>更新索引…`;
+  photosData = [...newEntries, ...photosData];
+  try {
+    await savePhotosJson();
+  } catch(e) {
+    console.error('保存照片列表失败', e);
+    // Photos uploaded but index failed — still show them
+  }
+
+  // Step 4: Update UI
+  for (const entry of newEntries) {
+    images.unshift({
+      src: `${RAW_URL}/photos/${entry.id}${entry.ext}`,
+      caption: entry.caption,
+      date: entry.date,
+      id: entry.id,
+    });
+  }
   renderGallery();
 
-  if(fail === 0) {
-    uploadStatus.className = 'upload-status success';
-    uploadStatus.textContent = `✅ ${success} 张照片上传成功！`;
-  } else {
-    uploadStatus.className = 'upload-status ' + (success > 0 ? 'success' : 'error');
-    uploadStatus.textContent = `${success} 张成功，${fail} 张失败`;
-  }
+  uploadStatus.className = 'upload-status success';
+  uploadStatus.textContent = `✅ ${success} 张照片上传成功！`;
 
   selectedFiles = [];
   fileInput.value = '';
